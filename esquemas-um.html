@@ -74,37 +74,49 @@ body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-s
 @media print {
   body {
     background: white !important;
-    height: auto !important;
-    overflow: visible !important;
+    margin: 0 !important;
+    padding: 0 !important;
   }
   .topbar, .sidebar, .right-panel, .canvas-toolbar,
   .status-bar, .modal-bg { display: none !important; }
-  .workspace { display: block !important; height: auto !important; overflow: visible !important; }
+  .workspace {
+    display: block !important;
+    height: auto !important;
+    overflow: visible !important;
+    page-break-after: avoid;
+    page-break-inside: avoid;
+  }
   .canvas-container {
     overflow: visible !important;
     width: 100% !important;
     height: auto !important;
     background: white !important;
+    padding: 0 !important;
+    page-break-after: avoid;
   }
   #canvas {
+    display: block !important;
     width: 100% !important;
     height: auto !important;
+    max-height: 95vh !important;
     transform: none !important;
     background: white !important;
+    page-break-after: avoid;
+    page-break-inside: avoid;
   }
   .canvas-bg { fill: white !important; }
   .grid-line { display: none !important; }
   #print-title {
     display: block !important;
     text-align: center;
-    font-size: 18px;
+    font-size: 14pt;
     font-weight: bold;
-    margin: 0 0 15px 0;
+    margin: 5mm 0;
     color: black;
   }
   @page {
     size: A3 landscape;
-    margin: 10mm;
+    margin: 8mm;
   }
 }
 </style>
@@ -739,6 +751,15 @@ async function exportPDF() {
   setStatus('Abriendo diálogo de impresión...');
   document.getElementById('print-title').textContent =
     document.getElementById('diagram-title').value || 'Diagrama';
+
+  alert('En el diálogo de impresión:\n' +
+        '1. Destino: Guardar como PDF\n' +
+        '2. Tamaño papel: A3\n' +
+        '3. Diseño: Horizontal\n' +
+        '4. Márgenes: Ninguno o Mínimos\n' +
+        '5. Escala: Ajustar al área imprimible\n' +
+        '6. Desmarca "Encabezado y pie de página"');
+
   setTimeout(() => {
     window.print();
     setStatus('Listo');
