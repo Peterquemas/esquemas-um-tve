@@ -47,6 +47,12 @@ body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-s
 .connection.selected { stroke-width: 3; }
 .conn-label { font-size: 9px; fill: #444; pointer-events: none; user-select: none; }
 .conn-handle { fill: #0066cc; cursor: pointer; }
+.connection-ghost { fill: none; stroke: transparent; stroke-width: 10; cursor: pointer; }
+.connection.hover { stroke-width: 2.5; filter: drop-shadow(0 0 2px rgba(0,102,204,0.5)); }
+.pending-line { fill: none; stroke: #aaa; stroke-width: 1.5; stroke-dasharray: 6 4; pointer-events: none; }
+.status-bar.connect-mode { background: #fff3cd !important; }
+.element-node.connect-source rect.bbox { stroke: #00aa00 !important; stroke-width: 3 !important; stroke-dasharray: 0 !important; fill: rgba(0,170,0,0.06) !important; }
+.element-node.connect-target rect.bbox { stroke: #cc0000 !important; stroke-width: 2 !important; stroke-dasharray: 4 2 !important; fill: rgba(204,0,0,0.06) !important; }
 
 .right-panel { width: 280px; background: white; border-left: 1px solid #ddd; padding: 12px; overflow-y: auto; flex-shrink: 0; }
 .right-panel h3 { font-size: 11px; font-weight: 600; text-transform: uppercase; color: #888; margin-bottom: 8px; letter-spacing: 0.05em; }
@@ -162,6 +168,8 @@ body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-s
       <button id="tool-connect" onclick="setTool('connect')">Conectar</button>
       <button id="tool-text" onclick="setTool('text')">Texto</button>
       <button onclick="deleteSelected()">Borrar</button>
+      <button id="btn-undo" onclick="undo()" title="Deshacer Ctrl+Z" disabled>↶ Deshacer</button>
+      <button id="btn-redo" onclick="redo()" title="Rehacer Ctrl+Y" disabled>↷ Rehacer</button>
       <button onclick="zoomIn()">+</button>
       <button onclick="zoomOut()">−</button>
       <button onclick="zoomReset()">100%</button>
@@ -315,12 +323,112 @@ const DESCRIBE_EXAMPLES = {
   simple: "Setup mínimo: un comentarista con microcasco, caja de conexión y camión UM."
 };
 
+let history = [];
+let historyIndex = -1;
+let lastMousePos = { x: 0, y: 0 };
+
+function pushHistory() {
+  history = history.slice(0, historyIndex + 1);
+  history.push(structuredClone({
+    elements: state.elements,
+    connections: state.connections,
+    title: document.getElementById('diagram-title')?.value || ''
+  }));
+  if (history.length > 30) history.shift();
+  historyIndex = history.length - 1;
+  updateUndoRedoButtons();
+}
+
+function undo() {
+  if (historyIndex <= 0) return;
+  historyIndex--;
+  restoreSnapshot(history[historyIndex]);
+}
+
+function redo() {
+  if (historyIndex >= history.length - 1) return;
+  historyIndex++;
+  restoreSnapshot(history[historyIndex]);
+}
+
+function restoreSnapshot(snap) {
+  state.elements = structuredClone(snap.elements);
+  state.connections = structuredClone(snap.connections);
+  const titleEl = document.getElementById('diagram-title');
+  if (titleEl) titleEl.value = snap.title || '';
+  state.selectedId = null;
+  state.selectedType = null;
+  state.pendingConnection = null;
+  clearOverlay();
+  document.getElementById('properties-panel').innerHTML = '<p style="font-size:11px;color:#888;padding:8px;background:#f9f9f9;border-radius:4px;">Selecciona un elemento o conexión.</p>';
+  renderAll();
+  updateUndoRedoButtons();
+  setStatus('Estado restaurado');
+}
+
+function updateUndoRedoButtons() {
+  const u = document.getElementById('btn-undo');
+  const r = document.getElementById('btn-redo');
+  if (u) u.disabled = historyIndex <= 0;
+  if (r) r.disabled = historyIndex >= history.length - 1;
+}
+
+function clearOverlay() {
+  const overlay = document.getElementById('overlay');
+  if (overlay) overlay.innerHTML = '';
+}
+
+function drawConnectOverlay() {
+  const overlay = document.getElementById('overlay');
+  if (!overlay) return;
+  overlay.querySelectorAll('.ghost-element').forEach(n => n.remove());
+  if (state.pendingConnection === null) return;
+  const src = state.elements.find(e => e.id === state.pendingConnection);
+  if (!src) return;
+  const sx = src.x + src.w / 2, sy = src.y + src.h / 2;
+
+  const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+  line.setAttribute('class', 'pending-line ghost-element');
+  line.setAttribute('x1', sx); line.setAttribute('y1', sy);
+  line.setAttribute('x2', lastMousePos.x); line.setAttribute('y2', lastMousePos.y);
+  overlay.appendChild(line);
+
+  const bg = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+  bg.setAttribute('class', 'ghost-element');
+  bg.setAttribute('x', src.x + src.w / 2 - 24); bg.setAttribute('y', src.y - 24);
+  bg.setAttribute('width', 48); bg.setAttribute('height', 18);
+  bg.setAttribute('rx', 4); bg.setAttribute('fill', '#00aa00');
+  bg.setAttribute('pointer-events', 'none');
+  overlay.appendChild(bg);
+
+  const txt = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+  txt.setAttribute('class', 'ghost-element');
+  txt.setAttribute('x', src.x + src.w / 2); txt.setAttribute('y', src.y - 11);
+  txt.setAttribute('text-anchor', 'middle'); txt.setAttribute('font-size', '10');
+  txt.setAttribute('font-weight', 'bold'); txt.setAttribute('fill', 'white');
+  txt.setAttribute('pointer-events', 'none');
+  txt.textContent = 'Origen';
+  overlay.appendChild(txt);
+}
+
+function handleCanvasMouseMove(e) {
+  const rect = document.getElementById('canvas').getBoundingClientRect();
+  lastMousePos.x = (e.clientX - rect.left) / state.zoom;
+  lastMousePos.y = (e.clientY - rect.top) / state.zoom;
+  if (state.tool === 'connect') {
+    drawConnectOverlay();
+  } else {
+    clearOverlay();
+  }
+}
+
 function init() {
   buildElementList();
   drawGrid();
   updateApiStatus();
   loadTemplate('vacio');
   document.getElementById('canvas').addEventListener('click', handleCanvasClick);
+  document.getElementById('canvas').addEventListener('mousemove', handleCanvasMouseMove);
   document.addEventListener('keydown', handleKeyDown);
 }
 
@@ -349,6 +457,7 @@ function buildElementList() {
     const rect = document.getElementById('canvas').getBoundingClientRect();
     const x = (e.clientX - rect.left) / state.zoom - 50;
     const y = (e.clientY - rect.top) / state.zoom - 50;
+    pushHistory();
     addElement(tipo, x, y);
   });
 }
@@ -402,7 +511,10 @@ function renderElements() {
     if (!meta) return;
     
     const group = document.createElementNS('http://www.w3.org/2000/svg', 'g');
-    group.setAttribute('class', 'element-node' + (state.selectedId === el.id && state.selectedType === 'element' ? ' selected' : ''));
+    let nodeClass = 'element-node';
+    if (state.selectedId === el.id && state.selectedType === 'element') nodeClass += ' selected';
+    if (state.tool === 'connect' && state.pendingConnection === el.id) nodeClass += ' connect-source';
+    group.setAttribute('class', nodeClass);
     group.setAttribute('transform', `translate(${el.x}, ${el.y})`);
     group.dataset.id = el.id;
     
@@ -427,7 +539,34 @@ function renderElements() {
     
     group.addEventListener('mousedown', (e) => startDrag(e, el.id));
     group.addEventListener('click', (e) => { e.stopPropagation(); selectElement(el.id); });
-    
+    group.addEventListener('mouseenter', () => {
+      if (state.tool === 'connect' && state.pendingConnection !== null && state.pendingConnection !== el.id) {
+        group.classList.add('connect-target');
+        const overlay = document.getElementById('overlay');
+        overlay.querySelectorAll('.target-badge').forEach(n => n.remove());
+        const bg = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+        bg.setAttribute('class', 'target-badge');
+        bg.setAttribute('x', el.x + el.w / 2 - 28); bg.setAttribute('y', el.y - 24);
+        bg.setAttribute('width', 56); bg.setAttribute('height', 18);
+        bg.setAttribute('rx', 4); bg.setAttribute('fill', '#cc0000');
+        bg.setAttribute('pointer-events', 'none');
+        overlay.appendChild(bg);
+        const txt = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+        txt.setAttribute('class', 'target-badge');
+        txt.setAttribute('x', el.x + el.w / 2); txt.setAttribute('y', el.y - 11);
+        txt.setAttribute('text-anchor', 'middle'); txt.setAttribute('font-size', '10');
+        txt.setAttribute('font-weight', 'bold'); txt.setAttribute('fill', 'white');
+        txt.setAttribute('pointer-events', 'none');
+        txt.textContent = 'Destino';
+        overlay.appendChild(txt);
+      }
+    });
+    group.addEventListener('mouseleave', () => {
+      group.classList.remove('connect-target');
+      const overlay = document.getElementById('overlay');
+      if (overlay) overlay.querySelectorAll('.target-badge').forEach(n => n.remove());
+    });
+
     g.appendChild(group);
     
     // Label debajo
@@ -463,6 +602,12 @@ function renderConnections() {
     const midY = (sp.y + tp.y) / 2;
     const d = `M ${sp.x} ${sp.y} L ${sp.x} ${midY} L ${tp.x} ${midY} L ${tp.x} ${tp.y}`;
     
+    const ghostPath = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+    ghostPath.setAttribute('d', d);
+    ghostPath.setAttribute('class', 'connection-ghost');
+    ghostPath.dataset.id = conn.id;
+    ghostPath.addEventListener('click', (e) => { e.stopPropagation(); selectConnection(conn.id); });
+
     const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
     path.setAttribute('d', d);
     path.setAttribute('class', 'connection' + (state.selectedId === conn.id && state.selectedType === 'connection' ? ' selected' : ''));
@@ -472,6 +617,11 @@ function renderConnections() {
     path.dataset.id = conn.id;
     path.style.cursor = 'pointer';
     path.addEventListener('click', (e) => { e.stopPropagation(); selectConnection(conn.id); });
+    ghostPath.addEventListener('mouseover', () => path.classList.add('hover'));
+    ghostPath.addEventListener('mouseout', () => path.classList.remove('hover'));
+    path.addEventListener('mouseover', () => path.classList.add('hover'));
+    path.addEventListener('mouseout', () => path.classList.remove('hover'));
+    g.appendChild(ghostPath);
     g.appendChild(path);
     
     // Marcador de flecha (definir una vez)
@@ -516,6 +666,7 @@ function startDrag(e, id) {
   e.stopPropagation();
   const el = state.elements.find(x => x.id === id);
   if (!el) return;
+  pushHistory();
   const rect = document.getElementById('canvas').getBoundingClientRect();
   dragData = {
     id,
@@ -544,8 +695,16 @@ function selectElement(id) {
   if (state.tool === 'connect') {
     if (state.pendingConnection === null) {
       state.pendingConnection = id;
-      setStatus('Selecciona el destino de la conexión');
+      const srcEl = state.elements.find(e => e.id === id);
+      const srcName = srcEl ? srcEl.label : id;
+      setStatus(`Origen seleccionado: ${srcName} · clic en el DESTINO o Escape para cancelar`);
+      renderAll();
     } else if (state.pendingConnection !== id) {
+      pushHistory();
+      const srcEl = state.elements.find(e => e.id === state.pendingConnection);
+      const tgtEl = state.elements.find(e => e.id === id);
+      const srcName = srcEl ? srcEl.label : state.pendingConnection;
+      const tgtName = tgtEl ? tgtEl.label : id;
       const connId = state.nextId++;
       state.connections.push({
         id: connId,
@@ -556,7 +715,8 @@ function selectElement(id) {
         dashed: false
       });
       state.pendingConnection = null;
-      setStatus('Conexión creada');
+      clearOverlay();
+      setStatus(`Conexión creada: ${srcName} → ${tgtName}`);
       renderAll();
     }
     return;
@@ -583,7 +743,7 @@ function showProperties() {
       <h3>Elemento seleccionado</h3>
       <div class="field">
         <label>Etiqueta</label>
-        <input type="text" value="${el.label}" oninput="updateElementLabel(${el.id}, this.value)">
+        <input type="text" value="${el.label}" onfocus="pushHistory()" oninput="updateElementLabel(${el.id}, this.value)">
       </div>
       <div class="field">
         <label>Posición X / Y</label>
@@ -608,7 +768,7 @@ function showProperties() {
       <h3>Conexión seleccionada</h3>
       <div class="field">
         <label>Etiqueta</label>
-        <input type="text" value="${conn.label}" oninput="updateConnLabel(${conn.id}, this.value)">
+        <input type="text" value="${conn.label}" onfocus="pushHistory()" oninput="updateConnLabel(${conn.id}, this.value)">
       </div>
       <div class="field">
         <label>Color</label>
@@ -631,10 +791,11 @@ function updateElementLabel(id, v) { const el = state.elements.find(e=>e.id===id
 function updateElementPos(id, axis, v) { const el = state.elements.find(e=>e.id===id); if(el){el[axis]=parseInt(v)||0; renderAll();} }
 function updateElementSize(id, axis, v) { const el = state.elements.find(e=>e.id===id); if(el){el[axis]=parseInt(v)||50; renderAll();} }
 function updateConnLabel(id, v) { const c = state.connections.find(x=>x.id===id); if(c){c.label=v; renderAll();} }
-function updateConnColor(id, v) { const c = state.connections.find(x=>x.id===id); if(c){c.color=v; renderAll(); showProperties();} }
-function updateConnDashed(id, v) { const c = state.connections.find(x=>x.id===id); if(c){c.dashed=v; renderAll();} }
+function updateConnColor(id, v) { pushHistory(); const c = state.connections.find(x=>x.id===id); if(c){c.color=v; renderAll(); showProperties();} }
+function updateConnDashed(id, v) { pushHistory(); const c = state.connections.find(x=>x.id===id); if(c){c.dashed=v; renderAll();} }
 
 function deleteElement(id) {
+  pushHistory();
   state.elements = state.elements.filter(e => e.id !== id);
   state.connections = state.connections.filter(c => c.de !== id && c.a !== id);
   state.selectedId = null;
@@ -642,6 +803,7 @@ function deleteElement(id) {
   renderAll();
 }
 function deleteConnection(id) {
+  pushHistory();
   state.connections = state.connections.filter(c => c.id !== id);
   state.selectedId = null;
   document.getElementById('properties-panel').innerHTML = '<p style="font-size:11px;color:#888;padding:8px;background:#f9f9f9;border-radius:4px;">Selecciona un elemento o conexión.</p>';
@@ -662,17 +824,41 @@ function handleCanvasClick(e) {
 }
 
 function handleKeyDown(e) {
-  if ((e.key === 'Delete' || e.key === 'Backspace') && state.selectedId !== null && document.activeElement.tagName !== 'INPUT' && document.activeElement.tagName !== 'TEXTAREA') {
+  const inInput = document.activeElement.tagName === 'INPUT' || document.activeElement.tagName === 'TEXTAREA';
+  if ((e.key === 'Delete' || e.key === 'Backspace') && state.selectedId !== null && !inInput) {
     deleteSelected();
+  }
+  if (e.key === 'Escape' && state.tool === 'connect') {
+    state.pendingConnection = null;
+    clearOverlay();
+    renderAll();
+    setStatus('Modo conectar activo · clic en el elemento ORIGEN');
+  }
+  if (!inInput && e.ctrlKey && !e.shiftKey && e.key === 'z') {
+    e.preventDefault();
+    undo();
+  }
+  if (!inInput && e.ctrlKey && (e.key === 'y' || (e.key === 'Z' && e.shiftKey))) {
+    e.preventDefault();
+    redo();
   }
 }
 
 function setTool(tool) {
   state.tool = tool;
   state.pendingConnection = null;
+  clearOverlay();
   document.querySelectorAll('.canvas-toolbar button').forEach(b => b.classList.remove('active'));
   document.getElementById('tool-' + tool)?.classList.add('active');
-  setStatus(tool === 'connect' ? 'Click en origen, luego en destino' : 'Listo');
+  const statusBar = document.getElementById('status').parentElement;
+  if (tool === 'connect') {
+    statusBar.classList.add('connect-mode');
+    setStatus('Modo conectar activo · clic en el elemento ORIGEN');
+  } else {
+    statusBar.classList.remove('connect-mode');
+    setStatus('Listo');
+  }
+  renderAll();
 }
 
 function zoomIn() { state.zoom = Math.min(2, state.zoom + 0.1); applyZoom(); }
@@ -687,6 +873,7 @@ function applyZoom() {
 function loadTemplate(name) {
   const t = TEMPLATES[name];
   if (!t) return;
+  pushHistory();
   state.elements = []; state.connections = [];
   state.nextId = 1;
   document.getElementById('diagram-title').value = t.titulo;
@@ -758,18 +945,9 @@ async function exportPDF() {
   setStatus('Abriendo diálogo de impresión...');
   document.getElementById('print-title').textContent =
     document.getElementById('diagram-title').value || 'Diagrama';
-
-  alert('En el diálogo de impresión:\n' +
-        '1. Destino: Guardar como PDF\n' +
-        '2. Tamaño papel: A3\n' +
-        '3. Diseño: Horizontal\n' +
-        '4. Márgenes: Ninguno o Mínimos\n' +
-        '5. Escala: Ajustar al área imprimible\n' +
-        '6. Desmarca "Encabezado y pie de página"');
-
   setTimeout(() => {
     window.print();
-    setStatus('Listo');
+    setStatus('Listo. En el diálogo: Destino "Guardar como PDF", Tamaño A3, Horizontal');
   }, 100);
 }
 
@@ -846,6 +1024,7 @@ Los índices "de" y "a" en conexiones son el índice (0-based) del elemento en e
     }
     const schema = JSON.parse(jsonText);
     
+    pushHistory();
     state.elements = []; state.connections = []; state.nextId = 1;
     document.getElementById('diagram-title').value = schema.titulo || 'Diagrama';
     
