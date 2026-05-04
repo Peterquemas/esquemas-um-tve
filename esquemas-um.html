@@ -714,10 +714,8 @@ function selectElement(id) {
         color: '#000000',
         dashed: false
       });
-      state.pendingConnection = null;
-      clearOverlay();
+      setTool('select');
       setStatus(`Conexión creada: ${srcName} → ${tgtName}`);
-      renderAll();
     }
     return;
   }
