@@ -53,6 +53,8 @@ body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-s
 .status-bar.connect-mode { background: #fff3cd !important; }
 .element-node.connect-source rect.bbox { stroke: #00aa00 !important; stroke-width: 3 !important; stroke-dasharray: 0 !important; fill: rgba(0,170,0,0.06) !important; }
 .element-node.connect-target rect.bbox { stroke: #cc0000 !important; stroke-width: 2 !important; stroke-dasharray: 4 2 !important; fill: rgba(204,0,0,0.06) !important; }
+.note-text { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif; user-select: none; cursor: move; }
+.note-node.selected .note-text { fill: #0066cc; outline: 1px dashed #0066cc; }
 
 .right-panel { width: 280px; background: white; border-left: 1px solid #ddd; padding: 12px; overflow-y: auto; flex-shrink: 0; }
 .right-panel h3 { font-size: 11px; font-weight: 600; text-transform: uppercase; color: #888; margin-bottom: 8px; letter-spacing: 0.05em; }
@@ -180,6 +182,7 @@ body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-s
       <g id="connections"></g>
       <g id="elements"></g>
       <g id="labels"></g>
+      <g id="notes"></g>
       <g id="overlay"></g>
     </svg>
   </div>
@@ -332,6 +335,7 @@ function pushHistory() {
   history.push(structuredClone({
     elements: state.elements,
     connections: state.connections,
+    notes: state.notes,
     title: document.getElementById('diagram-title')?.value || ''
   }));
   if (history.length > 30) history.shift();
@@ -354,6 +358,7 @@ function redo() {
 function restoreSnapshot(snap) {
   state.elements = structuredClone(snap.elements);
   state.connections = structuredClone(snap.connections);
+  state.notes = structuredClone(snap.notes || []);
   const titleEl = document.getElementById('diagram-title');
   if (titleEl) titleEl.value = snap.title || '';
   state.selectedId = null;
@@ -498,6 +503,7 @@ function addElement(tipo, x, y, label) {
 function renderAll() {
   renderElements();
   renderConnections();
+  renderNotes();
   updateCounts();
 }
 
@@ -807,15 +813,123 @@ function deleteConnection(id) {
   document.getElementById('properties-panel').innerHTML = '<p style="font-size:11px;color:#888;padding:8px;background:#f9f9f9;border-radius:4px;">Selecciona un elemento o conexión.</p>';
   renderAll();
 }
+function renderNotes() {
+  const ng = document.getElementById('notes');
+  if (!ng) return;
+  ng.innerHTML = '';
+  state.notes.forEach(note => {
+    const group = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+    group.setAttribute('class', 'note-node' + (state.selectedId === note.id && state.selectedType === 'note' ? ' selected' : ''));
+    group.dataset.id = note.id;
+    const txt = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+    txt.setAttribute('x', note.x);
+    txt.setAttribute('y', note.y);
+    txt.setAttribute('class', 'note-text');
+    txt.setAttribute('font-size', note.fontSize || 12);
+    txt.setAttribute('fill', state.selectedId === note.id && state.selectedType === 'note' ? '#0066cc' : '#222');
+    txt.textContent = note.texto;
+    group.appendChild(txt);
+    group.addEventListener('mousedown', (e) => startNoteDrag(e, note.id));
+    group.addEventListener('click', (e) => { e.stopPropagation(); selectNote(note.id); });
+    ng.appendChild(group);
+  });
+}
+
+let noteDragData = null;
+function startNoteDrag(e, id) {
+  if (state.tool !== 'select') return;
+  e.stopPropagation();
+  const note = state.notes.find(n => n.id === id);
+  if (!note) return;
+  pushHistory();
+  const rect = document.getElementById('canvas').getBoundingClientRect();
+  noteDragData = {
+    id,
+    offsetX: (e.clientX - rect.left) / state.zoom - note.x,
+    offsetY: (e.clientY - rect.top) / state.zoom - note.y
+  };
+  document.addEventListener('mousemove', onNoteDrag);
+  document.addEventListener('mouseup', endNoteDrag);
+}
+function onNoteDrag(e) {
+  if (!noteDragData) return;
+  const note = state.notes.find(n => n.id === noteDragData.id);
+  if (!note) return;
+  const rect = document.getElementById('canvas').getBoundingClientRect();
+  note.x = Math.round(((e.clientX - rect.left) / state.zoom - noteDragData.offsetX) / 10) * 10;
+  note.y = Math.round(((e.clientY - rect.top) / state.zoom - noteDragData.offsetY) / 10) * 10;
+  renderNotes();
+}
+function endNoteDrag() {
+  noteDragData = null;
+  document.removeEventListener('mousemove', onNoteDrag);
+  document.removeEventListener('mouseup', endNoteDrag);
+}
+
+function selectNote(id) {
+  state.selectedId = id;
+  state.selectedType = 'note';
+  renderAll();
+  const note = state.notes.find(n => n.id === id);
+  if (!note) return;
+  document.getElementById('properties-panel').innerHTML = `
+    <h3>Texto</h3>
+    <div class="field">
+      <label>Contenido</label>
+      <input type="text" value="${note.texto.replace(/"/g, '&quot;')}" onfocus="pushHistory()" oninput="updateNoteText(${note.id}, this.value)">
+    </div>
+    <div class="field">
+      <label>Posición X / Y</label>
+      <div style="display:flex; gap:4px;">
+        <input type="text" value="${note.x}" oninput="updateNotePos(${note.id}, 'x', this.value)" style="width:50%;">
+        <input type="text" value="${note.y}" oninput="updateNotePos(${note.id}, 'y', this.value)" style="width:50%;">
+      </div>
+    </div>
+    <div class="field">
+      <label>Tamaño fuente (px)</label>
+      <input type="number" value="${note.fontSize || 12}" min="6" max="72" oninput="updateNoteFontSize(${note.id}, this.value)">
+    </div>
+    <button class="btn danger" onclick="deleteNote(${note.id})" style="width:100%; margin-top:8px;">Borrar texto</button>
+  `;
+}
+
+function updateNoteText(id, v) { const n = state.notes.find(x=>x.id===id); if(n){n.texto=v; renderNotes();} }
+function updateNotePos(id, axis, v) { const n = state.notes.find(x=>x.id===id); if(n){n[axis]=parseInt(v)||0; renderNotes();} }
+function updateNoteFontSize(id, v) { const n = state.notes.find(x=>x.id===id); if(n){n.fontSize=parseInt(v)||12; renderNotes();} }
+
+function deleteNote(id) {
+  pushHistory();
+  state.notes = state.notes.filter(n => n.id !== id);
+  state.selectedId = null;
+  state.selectedType = null;
+  document.getElementById('properties-panel').innerHTML = '<p style="font-size:11px;color:#888;padding:8px;background:#f9f9f9;border-radius:4px;">Selecciona un elemento o conexión.</p>';
+  renderAll();
+}
+
 function deleteSelected() {
   if (state.selectedType === 'element') deleteElement(state.selectedId);
   else if (state.selectedType === 'connection') deleteConnection(state.selectedId);
+  else if (state.selectedType === 'note') deleteNote(state.selectedId);
 }
 
 function handleCanvasClick(e) {
-  if (e.target.id === 'canvas' || e.target.tagName === 'rect' && e.target.classList.contains('canvas-bg')) {
+  if (state.tool === 'text') {
+    const rect = document.getElementById('canvas').getBoundingClientRect();
+    const x = Math.round((e.clientX - rect.left) / state.zoom);
+    const y = Math.round((e.clientY - rect.top) / state.zoom);
+    const texto = prompt('Texto a añadir:');
+    if (texto && texto.trim()) {
+      pushHistory();
+      state.notes.push({ id: state.nextId++, x, y, texto: texto.trim(), fontSize: 14 });
+      renderAll();
+    }
+    setTool('select');
+    return;
+  }
+  if (e.target.id === 'canvas' || (e.target.tagName === 'rect' && e.target.classList.contains('canvas-bg'))) {
     state.selectedId = null; state.selectedType = null;
     state.pendingConnection = null;
+    clearOverlay();
     document.getElementById('properties-panel').innerHTML = '<p style="font-size:11px;color:#888;padding:8px;background:#f9f9f9;border-radius:4px;">Selecciona un elemento o conexión.</p>';
     renderAll();
   }
@@ -852,6 +966,9 @@ function setTool(tool) {
   if (tool === 'connect') {
     statusBar.classList.add('connect-mode');
     setStatus('Modo conectar activo · clic en el elemento ORIGEN');
+  } else if (tool === 'text') {
+    statusBar.classList.remove('connect-mode');
+    setStatus('Modo texto · clic en el canvas donde quieras añadir texto');
   } else {
     statusBar.classList.remove('connect-mode');
     setStatus('Listo');
@@ -872,7 +989,7 @@ function loadTemplate(name) {
   const t = TEMPLATES[name];
   if (!t) return;
   pushHistory();
-  state.elements = []; state.connections = [];
+  state.elements = []; state.connections = []; state.notes = [];
   state.nextId = 1;
   document.getElementById('diagram-title').value = t.titulo;
   
@@ -908,7 +1025,8 @@ function saveSchema() {
   const data = {
     titulo: document.getElementById('diagram-title').value,
     elementos: state.elements,
-    conexiones: state.connections
+    conexiones: state.connections,
+    notas: state.notes
   };
   const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
   const url = URL.createObjectURL(blob);
@@ -930,7 +1048,8 @@ function handleFileLoad(e) {
       document.getElementById('diagram-title').value = data.titulo || 'Diagrama';
       state.elements = data.elementos || [];
       state.connections = data.conexiones || [];
-      const maxId = Math.max(0, ...state.elements.map(e=>e.id), ...state.connections.map(c=>c.id));
+      state.notes = data.notas || [];
+      const maxId = Math.max(0, ...state.elements.map(e=>e.id), ...state.connections.map(c=>c.id), ...state.notes.map(n=>n.id));
       state.nextId = maxId + 1;
       renderAll();
       setStatus('Esquema cargado');
